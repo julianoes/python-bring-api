@@ -28,9 +28,14 @@ async def main():
 
         # Save item using English name - should auto-resolve and show icon
         await bring.saveItemAsync(list_uuid, 'Pineapple', 'via catalog')
-        print("Saved 'Pineapple' (should show with pineapple icon)")
+        print("Saved 'Pineapple'")
 
-        # Wait a bit so you can check the app, then clean up
+        # Read back - should return English names
+        items = await bring.getItemsAsync(list_uuid)
+        for p in items.get('purchase', []):
+            print(f"  Item: {p['name']} ({p['specification']})")
+
+        # Clean up
         await asyncio.sleep(5)
         await bring.removeItemAsync(list_uuid, 'Pineapple')
         print("Removed 'Pineapple'")

@@ -24,6 +24,7 @@ class Bring:
         self.uuid = ''
         self.publicUuid = ''
         self._catalog = {}  # maps lowercase localized name -> German itemId
+        self._catalog_reverse = {}  # maps lowercase German itemId -> localized name
 
         self.url = 'https://api.getbring.com/rest/v2/'
 
@@ -290,11 +291,14 @@ class Bring:
             raise BringRequestException('Loading catalog failed due to request exception.') from e
 
         self._catalog = {}
+        self._catalog_reverse = {}
         for section in data.get('catalog', {}).get('sections', []):
             for item in section.get('items', []):
                 self._catalog[item['name'].lower()] = item['itemId']
                 # Also map the itemId itself so German names pass through
                 self._catalog[item['itemId'].lower()] = item['itemId']
+                # Reverse: German itemId -> localized name
+                self._catalog_reverse[item['itemId'].lower()] = item['name']
 
         return data
 
@@ -355,10 +359,19 @@ class Bring:
                 r.raise_for_status()
 
                 try:
-                    return await r.json()
+                    data = await r.json()
                 except JSONDecodeError as e:
                     _LOGGER.error(f'Exception: Cannot get items for list {listUuid}:\n{traceback.format_exc()}')
                     raise BringParseException('Loading list items failed during parsing of request response.') from e
+
+                # Translate German item IDs back to localized names
+                if self._catalog_reverse:
+                    for item in data.get('purchase', []):
+                        item['name'] = self._catalog_reverse.get(item['name'].lower(), item['name'])
+                    for item in data.get('recently', []):
+                        item['name'] = self._catalog_reverse.get(item['name'].lower(), item['name'])
+
+                return data
         except asyncio.TimeoutError as e:
             _LOGGER.error(f'Exception: Cannot get items for list {listUuid}:\n{traceback.format_exc()}')
             raise BringRequestException('Loading list items failed due to connection timeout.') from e
