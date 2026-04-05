@@ -23,6 +23,7 @@ class Bring:
         self.password = password
         self.uuid = ''
         self.publicUuid = ''
+        self._catalog = {}  # maps lowercase localized name -> German itemId
 
         self.url = 'https://api.getbring.com/rest/v2/'
 
@@ -213,6 +214,89 @@ class Bring:
         except aiohttp.ClientError as e:
             _LOGGER.error(f'Exception: Cannot get lists:\n{traceback.format_exc()}')
             raise BringRequestException('Loading lists failed due to request exception.') from e
+
+    def loadCatalog(self, locale: str) -> dict:
+        """Load the article catalog for a given locale and build a translation map
+        from localized item names to internal item IDs. This enables icons to be
+        displayed when saving items via the API.
+
+        Call this once after login, before saving items.
+
+        Parameters
+        ----------
+        locale : str
+            The locale identifier (e.g. 'en-US', 'de-DE', 'fr-FR').
+
+        Returns
+        -------
+        dict
+            The raw catalog response.
+
+        Raises
+        ------
+        BringRequestException
+            If the request fails.
+        BringParseException
+            If the parsing of the request response fails.
+        """
+        async def _async():
+            async with aiohttp.ClientSession() as session:
+                self._session = session
+                res = await self.loadCatalogAsync(locale)
+                self._session = None
+                return res
+        return asyncio.run(_async())
+
+    async def loadCatalogAsync(self, locale: str) -> dict:
+        """Load the article catalog for a given locale and build a translation map
+        from localized item names to internal item IDs. This enables icons to be
+        displayed when saving items via the API.
+
+        Call this once after login, before saving items.
+
+        Parameters
+        ----------
+        locale : str
+            The locale identifier (e.g. 'en-US', 'de-DE', 'fr-FR').
+
+        Returns
+        -------
+        dict
+            The raw catalog response.
+
+        Raises
+        ------
+        BringRequestException
+            If the request fails.
+        BringParseException
+            If the parsing of the request response fails.
+        """
+        try:
+            url = f'https://web.getbring.com/locale/catalog.{locale}.json'
+            async with self._session.get(url) as r:
+                _LOGGER.debug(f'Response from %s: %s', url, r.status)
+                r.raise_for_status()
+
+                try:
+                    data = await r.json()
+                except JSONDecodeError as e:
+                    _LOGGER.error(f'Exception: Cannot get catalog:\n{traceback.format_exc()}')
+                    raise BringParseException(f'Loading catalog failed during parsing of request response.') from e
+        except asyncio.TimeoutError as e:
+            _LOGGER.error(f'Exception: Cannot get catalog:\n{traceback.format_exc()}')
+            raise BringRequestException('Loading catalog failed due to connection timeout.') from e
+        except aiohttp.ClientError as e:
+            _LOGGER.error(f'Exception: Cannot get catalog:\n{traceback.format_exc()}')
+            raise BringRequestException('Loading catalog failed due to request exception.') from e
+
+        self._catalog = {}
+        for section in data.get('catalog', {}).get('sections', []):
+            for item in section.get('items', []):
+                self._catalog[item['name'].lower()] = item['itemId']
+                # Also map the itemId itself so German names pass through
+                self._catalog[item['itemId'].lower()] = item['itemId']
+
+        return data
 
     def getItems(self, listUuid: str) -> BringItemsResponse:
         """
@@ -407,8 +491,10 @@ class Bring:
         BringRequestException
             If the request fails.
         """
+        # Resolve to catalog itemId for icon support, fall back to original name
+        purchase = self._catalog.get(itemName.lower(), itemName)
         data = {
-            'purchase': itemName,
+            'purchase': purchase,
             'specification': specification,
         }
         try:
@@ -480,7 +566,7 @@ class Bring:
             If the request fails.
         """
         data = {
-            'purchase': itemName,
+            'purchase': self._catalog.get(itemName.lower(), itemName),
             'specification': specification
         }
         try:
@@ -548,7 +634,7 @@ class Bring:
             If the request fails.
         """
         data = {
-            'remove': itemName,
+            'remove': self._catalog.get(itemName.lower(), itemName),
         }
         try:
             url = f'{self.url}bringlists/{listUuid}'
@@ -617,7 +703,7 @@ class Bring:
             If the request fails.
         """
         data = {
-            'recently': itemName
+            'recently': self._catalog.get(itemName.lower(), itemName)
         }
         try:
             url = f'{self.url}bringlists/{listUuid}'
